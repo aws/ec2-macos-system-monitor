@@ -1,0 +1,107 @@
+#!/bin/bash
+
+# This is the default plist location and is updated by Homebrew on install
+HOMEBREW_PREFIX="/usr/local/Cellar"
+# System location for desired services
+LAUNCHD_PLIST_DIR="/Library/LaunchDaemons"
+# Deprecated: This is the original relayd plist
+RELAYD_PLIST="com.amazon.ec2.monitoring.relayd.plist"
+# Search path for all agents, its a glob for future agents
+AGENT_PLISTS_PATTERN="${HOMEBREW_PREFIX}/com.amazon.ec2.monitoring.agents."
+
+# Print usage
+usage() {
+  echo "Usage: setup-ec2monitoring <operation>"
+  echo "Operations are:"
+  echo "    enable  - Enable the monitoring launchd services"
+  echo "    disable - Disable the monitoring launchd services"
+  echo "    list    - List the current services"
+}
+
+# Helper function to exit
+die() {
+    echo "$@" >&2
+    exit 1
+}
+
+# Helper function for getting the label for working with launchd
+# Takes the name of the plist as an argument"
+get_label() {
+    local plist_name=${1:?}
+
+    /usr/libexec/PlistBuddy -c "Print Label" "${LAUNCHD_PLIST_DIR}"/"${plist_name}"
+}
+
+# Helper function for enabling a service
+# Takes the name of the plist as an argument"
+enable_service() {
+    local plist_name=${1:?}
+    local label
+    local homebrew_plist
+    local system_plist
+    homebrew_plist="${HOMEBREW_PREFIX}/${plist_name}"
+    system_plist="${LAUNCHD_PLIST_DIR}/${plist_name}"
+
+    # Homebrew doesn't install into /Library/LaunchDaemons so this manages those files, first check this plist
+    # is desired for this version of monitoring
+    if [ -f "${homebrew_plist}" ]; then
+
+      # If the file is missing, its a fresh install, just copy
+      if [ ! -f "${system_plist}" ]; then
+          echo -e "Adding ${plist_name} to ${LAUNCHD_PLIST_DIR}"
+          cp "${homebrew_plist}" "${LAUNCHD_PLIST_DIR}"
+      # If the file differs, replace it
+      elif ! cmp -s "${system_plist}" "${homebrew_plist}"; then
+          echo -e "Updating ${plist_name} at ${LAUNCHD_PLIST_DIR}"
+          cp "${homebrew_plist}" "${LAUNCHD_PLIST_DIR}"
+      fi
+      label="$(get_label "${plist_name}")"
+      test -z "${label}" && echo "possibly invalid plist: ${plist_name}" >&2 && return 1
+      launchctl enable system/"${label}" && launchctl bootstrap system "${system_plist}"
+
+    fi
+}
+
+# Helper function for disabling a service
+# Takes the name of the plist as an argument"
+disable_service() {
+    local plist_name=${1:?}
+    local label
+
+    if [ -f "${plist}" ];then
+      label="$(get_label "${plist_name}")"
+      test -z "${label}" && echo "possibly invalid plist: ${plist_name}" >&2 && return 1
+      launchctl bootout system "${LAUNCHD_PLIST_DIR}/${plist_name}"
+      launchctl disable system/"${label}"
+    fi
+}
+
+# Ensure this is run as root
+test "${EUID}" -ne 0 && die "must run as root"
+
+# Get the desired operation
+operation=${1}
+
+if [ "${operation}" == "enable" ]; then
+    enable_service ${RELAYD_PLIST}
+    for plist in "${AGENT_PLISTS_PATTERN}"*.plist; do
+        enable_service "$(basename "${plist}")"
+    done
+elif [ "${operation}" == "disable" ]; then
+    for plist in "${AGENT_PLISTS_PATTERN}"*.plist; do
+        disable_service "$(basename "${plist}")"
+    done
+    if [ -f "${LAUNCHD_PLIST_DIR}/${RELAYD_PLIST}" ]; then
+        disable_service ${RELAYD_PLIST}
+    fi
+elif [ "${operation}" == "list" ]; then
+    if [ -f "${LAUNCHD_PLIST_DIR}/${RELAYD_PLIST}" ]; then
+        get_label ${RELAYD_PLIST}
+    fi
+    for plist in "${AGENT_PLISTS_PATTERN}"*.plist; do
+        get_label "$(basename "${plist}")"
+    done
+else
+    usage
+    die "unknown operation: ${operation}"
+fi
