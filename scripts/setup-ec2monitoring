@@ -1,13 +1,15 @@
 #!/bin/bash
 
-# This is the default plist location and is updated by Homebrew on install
+# Deprecated: this is the orignial plist location that was updated by Homebrew on install
 HOMEBREW_PREFIX="/usr/local/Cellar"
 # System location for desired services
 LAUNCHD_PLIST_DIR="/Library/LaunchDaemons"
 # Deprecated: This is the original relayd plist
 RELAYD_PLIST="com.amazon.ec2.monitoring.relayd.plist"
-# Search path for all agents, its a glob for future agents
+# Deprecated: search path for all agents in the Homebrew directory
 AGENT_PLISTS_PATTERN="${HOMEBREW_PREFIX}/com.amazon.ec2.monitoring.agents."
+# Search path for all agents in the Launchd directory, its a glob for future agents
+LAUNCHD_AGENT_PLISTS_PATTERN="${LAUNCHD_PLIST_DIR}/com.amazon.ec2.monitoring.agents."
 
 # Print usage
 usage() {
@@ -55,6 +57,13 @@ enable_service() {
           echo -e "Updating ${plist_name} at ${LAUNCHD_PLIST_DIR}"
           cp "${homebrew_plist}" "${LAUNCHD_PLIST_DIR}"
       fi
+
+    fi
+
+    # Casks install into /Library/LaunchDaemons so this is for directly enabling them
+    # as well as the plists in the deprecated location
+    if [ -f "${system_plist}" ]; then
+
       label="$(get_label "${plist_name}")"
       test -z "${label}" && echo "possibly invalid plist: ${plist_name}" >&2 && return 1
       launchctl enable system/"${label}" && launchctl bootstrap system "${system_plist}"
@@ -68,7 +77,7 @@ disable_service() {
     local plist_name=${1:?}
     local label
 
-    if [ -f "${plist}" ];then
+    if [ -f "${plist}" ]; then
       label="$(get_label "${plist_name}")"
       test -z "${label}" && echo "possibly invalid plist: ${plist_name}" >&2 && return 1
       launchctl bootout system "${LAUNCHD_PLIST_DIR}/${plist_name}"
@@ -82,13 +91,24 @@ test "${EUID}" -ne 0 && die "must run as root"
 # Get the desired operation
 operation=${1}
 
+# Get the plist files from both the Homebrew location and Launchd and combine them into one list
+agent_plists=($(ls ${AGENT_PLISTS_PATTERN}*.plist 2> /dev/null))
+launchd_plists=($(ls ${LAUNCHD_AGENT_PLISTS_PATTERN}*.plist 2> /dev/null))
+tmp=("${agent_plists[@]}" "${launchd_plists[@]}")
+plists=()
+for plist in "${tmp[@]}"; do
+    if [ "$plist" != "" ]; then
+        plists+=("$plist")
+    fi
+done
+
 if [ "${operation}" == "enable" ]; then
     enable_service ${RELAYD_PLIST}
-    for plist in "${AGENT_PLISTS_PATTERN}"*.plist; do
+    for plist in "${plists[@]}"; do
         enable_service "$(basename "${plist}")"
     done
 elif [ "${operation}" == "disable" ]; then
-    for plist in "${AGENT_PLISTS_PATTERN}"*.plist; do
+    for plist in "${plists[@]}"; do
         disable_service "$(basename "${plist}")"
     done
     if [ -f "${LAUNCHD_PLIST_DIR}/${RELAYD_PLIST}" ]; then
@@ -98,7 +118,7 @@ elif [ "${operation}" == "list" ]; then
     if [ -f "${LAUNCHD_PLIST_DIR}/${RELAYD_PLIST}" ]; then
         get_label ${RELAYD_PLIST}
     fi
-    for plist in "${AGENT_PLISTS_PATTERN}"*.plist; do
+    for plist in "${plists[@]}"; do
         get_label "$(basename "${plist}")"
     done
 else
