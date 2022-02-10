@@ -1,18 +1,20 @@
+.PHONY: all
+all: build test
 
-PROJECTNAME=$(shell basename "$(PWD)")
-VERSION=$(shell git describe --always --tags)
+.PHONY: build
+build: cpuutilization_darwin
 
+cpuutilization_darwin: cpuutilization_darwin_amd64 cpuutilization_darwin_arm64
+	lipo -create -output cpuutilization_darwin cpuutilization_darwin_amd64 cpuutilization_darwin_arm64
+
+cpuutilization_darwin_%:
+	GOOS=darwin GOARCH=$* go build -o cpuutilization_darwin_$* -ldflags="-s -w" .
+
+.PHONY: test
+test:
+	GOOS=darwin go test -v -cover ./...
+
+.PHONY: clean
 clean:
 	go clean
-	rm -f *.tar.gz
-
-build:
-	@GOOS=darwin GOARCH=amd64 go build -o cpuutilization_darwin -ldflags="-s -w" main.go
-
-tar:
-	GZIP=-n tar czf $(PROJECTNAME)-$(VERSION).tar.gz *
-
-test: build
-	@GOOS=darwin GOARCH=amd64 go test lib/ec2macossystemmonitor/*.go -v -cover
-
-all: build tar
+	rm -f cpuutilization_darwin*
