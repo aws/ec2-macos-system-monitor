@@ -2,8 +2,9 @@ package ec2macossystemmonitor
 
 import (
 	"fmt"
-	"github.com/shirou/gopsutil/cpu"
 	"strconv"
+
+	"github.com/shirou/gopsutil/cpu"
 )
 
 // RunningCpuUsage gathers the value expected for CloudWatch but allows long running measurement. This is intended for

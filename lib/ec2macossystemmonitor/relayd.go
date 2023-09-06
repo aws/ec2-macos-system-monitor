@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const SocketTimeout = 5  * time.Second
+const SocketTimeout = 5 * time.Second
 
 // BuildMessage takes a tag along with data for the tag and builds a byte slice to be sent to the relay.
 //
@@ -114,7 +114,7 @@ func SendMessage(tag string, data string, compress bool) (n int, err error) {
 type SerialRelay struct {
 	serialConnection SerialConnection // serialConnection is the managed serial device connection for writing
 	listener         net.UnixListener // listener is the UNIX domain socket UnixzzListener for reading
-	ReadyToClose     chan bool // ReadyToClose is the channel for communicating the need to close connections
+	ReadyToClose     chan bool        // ReadyToClose is the channel for communicating the need to close connections
 }
 
 // NewRelay creates an instance of the relay server and returns a SerialRelay for manual closing.
