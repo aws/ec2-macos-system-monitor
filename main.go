@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
@@ -13,12 +14,16 @@ import (
 	ec2sm "github.com/aws/ec2-macos-system-monitor/lib/ec2macossystemmonitor"
 )
 
-// pollInterval is the duration in between gathering of CPU metrics
+// pollInterval is the duration in between gathering of CPU metrics.
 const pollInterval = 60 * time.Second
 
-// DefaultSerialDevice is the default serial device attached to mac1.metal instances for communication
-// This device is able to receive various payloads when encapsulated in json
-const DefaultSerialDevice = "/dev/cu.pci-serial0"
+// defaultSerialDevices lists the preferred order and supported set of serial
+// devices attached to the instance for monitor communication. The serial device
+// is able to receive monitor payloads encapsulated in json.
+var defaultSerialDevices = []string{
+	"/dev/cu.pci-0000:4c:00.0,@00",
+	"/dev/cu.pci-serial0",
+}
 
 func main() {
 	disableSyslog := flag.Bool("disable-syslog", false, "Prevent log output to syslog")
@@ -29,8 +34,14 @@ func main() {
 		log.Fatalf("Failed to create logger: %s", err)
 	}
 
+	serialDevice := firstSerialDevice(defaultSerialDevices)
+	if serialDevice == "" {
+		log.Fatal("No serial devices found for relay")
+	}
+	logger.Infof("Found serial device for relay %q\n", serialDevice)
+
 	logger.Infof("Starting up relayd for monitoring\n")
-	relay, err := ec2sm.NewRelay(DefaultSerialDevice)
+	relay, err := ec2sm.NewRelay(serialDevice)
 	if err != nil {
 		log.Fatalf("Failed to create relay: %s", err)
 	}
@@ -96,4 +107,24 @@ func main() {
 		}
 
 	}
+}
+
+// firstSerialDevice returns the first path found in the list of serial device
+// paths given.
+func firstSerialDevice(devPaths []string) string {
+	serialDeviceNode := func(p string) bool {
+		if stat, err := os.Stat(p); err == nil {
+			return stat.Mode()&fs.ModeCharDevice == fs.ModeCharDevice
+		}
+		return false
+	}
+
+	for _, devPath := range devPaths {
+		if serialDeviceNode(devPath) {
+			return devPath
+		}
+	}
+
+	// no suitable device found
+	return ""
 }
