@@ -9,8 +9,8 @@ import (
 	"go.bug.st/serial"
 )
 
-// SocketPath is the default socket for relayd.
-const SocketPath = "/tmp/.ec2monitoring.sock"
+// RelaySocketPath is the default socket for relayd.
+const RelaySocketPath = "/tmp/.ec2monitoring.sock"
 
 // SerialConnection is the container for passing the ReadWriteCloser for serial connections.
 type SerialConnection struct {
@@ -38,7 +38,7 @@ type SerialMessage struct {
 
 // CheckSocketExists is a helper function to quickly check for the server.
 func CheckSocketExists() (exists bool) {
-	return fileExists(SocketPath)
+	return fileExists(RelaySocketPath)
 }
 
 // NewSerialConnection creates a serial device connection and returns a reference to the connection.
