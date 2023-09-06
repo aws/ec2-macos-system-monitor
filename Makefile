@@ -22,7 +22,7 @@ cpuutilization_darwin_%:
 
 .PHONY: test
 test:
-	GOOS=darwin $(go) test -v -cover $(T)
+	$(go) test -v -cover $(T)
 
 .PHONY: clean
 clean:
