@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const SocketTimeout = 5  * time.Second
+const SocketTimeout = 5 * time.Second
 
 // BuildMessage takes a tag along with data for the tag and builds a byte slice to be sent to the relay.
 //
@@ -79,23 +79,24 @@ func BuildMessage(tag string, data string, compress bool) ([]byte, error) {
 // PassToRelayd takes a byte slice and writes it to a UNIX socket to send for relaying.
 func PassToRelayd(messageBytes []byte) (n int, err error) {
 	// The socket file needs to be created to write, the server creates this file.
-	if !fileExists(SocketPath) {
-		return 0, fmt.Errorf("ec2macossystemmonitor: %s does not exist, cannot send message: %s", SocketPath, string(messageBytes))
+	if !fileExists(RelaySocketPath) {
+		return 0, fmt.Errorf("ec2macossystemmonitor: %s does not exist, cannot send message: %s", RelaySocketPath, string(messageBytes))
 	}
+
 	// Finally write the serial message to the domain socket
-	sock, err := net.Dial("unix", SocketPath)
+	sock, err := net.Dial("unix", RelaySocketPath)
 	if err != nil {
-		return 0, fmt.Errorf("cec2macossystemmonitor: could not connect to %s: %s", SocketPath, err)
+		return 0, fmt.Errorf("cec2macossystemmonitor: could not connect to %s: %s", RelaySocketPath, err)
 	}
 	defer sock.Close()
 
-	_, err = sock.Write(messageBytes)
+	n, err = sock.Write(messageBytes)
 	if err != nil {
-		return 0, fmt.Errorf("ec2macossystemmonitor: error while writing to socket: %s", err)
+		return n, fmt.Errorf("ec2macossystemmonitor: error while writing to socket: %s", err)
 	}
 
 	// Return the length of the bytes written to the socket
-	return len(messageBytes), nil
+	return n, nil
 }
 
 // SendMessage takes a tag along with data for the tag and writes to a UNIX socket to send for relaying. This is provided
@@ -112,9 +113,12 @@ func SendMessage(tag string, data string, compress bool) (n int, err error) {
 // SerialRelay contains the serial connection and UNIX domain socket listener as well as the channel that communicates
 // that the resources can be closed.
 type SerialRelay struct {
-	serialConnection SerialConnection // serialConnection is the managed serial device connection for writing
-	listener         net.UnixListener // listener is the UNIX domain socket UnixzzListener for reading
-	ReadyToClose     chan bool // ReadyToClose is the channel for communicating the need to close connections
+	 // serialConnection is the managed serial device connection for writing.
+	serialConnection *SerialConnection
+	 // listener is the socket where relay input is read from.
+	listener         net.Listener
+	// ReadyToClose is the channel for communicating the need to close connections.
+	ReadyToClose     chan bool
 }
 
 // NewRelay creates an instance of the relay server and returns a SerialRelay for manual closing.
@@ -125,14 +129,14 @@ func NewRelay(serialDevice string) (relay SerialRelay, err error) {
 	// Create a serial connection
 	serCon, err := NewSerialConnection(serialDevice)
 	if err != nil {
-		return SerialRelay{}, fmt.Errorf("relayd: failed to build a connection to serial interface: %s", err)
+		return SerialRelay{}, fmt.Errorf("relayd: failed to build a connection to serial interface: %w", err)
 	}
 
 	// Clean the socket in case its stale
-	if err = os.RemoveAll(SocketPath); err != nil {
+	if err = os.RemoveAll(RelaySocketPath); err != nil {
 		if _, ok := err.(*os.PathError); ok {
 			// Help guide that the SocketPath is invalid
-			return SerialRelay{}, fmt.Errorf("relayd: unable to clean %s: %s", SocketPath, err)
+			return SerialRelay{}, fmt.Errorf("relayd: unable to clean %s: %w", RelaySocketPath, err)
 		} else {
 			// Unknown issue, return the error directly
 			return SerialRelay{}, err
@@ -141,36 +145,51 @@ func NewRelay(serialDevice string) (relay SerialRelay, err error) {
 	}
 
 	// Create a listener on the socket by getting the address and then creating a Unix Listener
-	addr, err := net.ResolveUnixAddr("unix", SocketPath)
+	addr, err := net.ResolveUnixAddr("unix", RelaySocketPath)
 	if err != nil {
-		return SerialRelay{}, fmt.Errorf("relayd: unable to resolve address: %s", err)
+		return SerialRelay{}, fmt.Errorf("relayd: unable to resolve address: %w", err)
 	}
 	listener, err := net.ListenUnix("unix", addr)
 	if err != nil {
-		return SerialRelay{}, fmt.Errorf("relayd: unable to listen on socket: %s", err)
+		return SerialRelay{}, fmt.Errorf("relayd: unable to listen on socket: %w", err)
 	}
 	// Create the SerialRelay to return
-	relay.listener = *listener
-	relay.serialConnection = *serCon
+	relay.listener = listener
+	relay.serialConnection = serCon
 	// Create the channel for sending an exit
 	relay.ReadyToClose = make(chan bool)
 	return relay, nil
 }
 
-// StartRelay takes the connections for the serial relay and begins listening.
-//
-// This is a server implementation of the SerialRelay so it logs to a provided logger, and empty logger can be provided
-// to stop logging if desired. This function is designed to be used in a go routine so logging may be the only way to
-// get data about behavior while it is running. The resources can be shut down by sending true to the ReadyToClose
-// channel. This invokes CleanUp() which is exported in case the caller desires to call it instead.
-func (relay *SerialRelay) StartRelay(logger *Logger, relayStatus *StatusLogBuffer) {
-	for {
+// setListenerDeadline will set a deadline on the underlying net.Listener if
+// supported, no-op otherwise.
+func (relay *SerialRelay) setListenerDeadline(t time.Time) error {
+	deadliner, ok := relay.listener.(interface{
+		SetDeadline(time.Time) error
+	})
+	if ok {
+		return deadliner.SetDeadline(t)
+	}
 
-		// Accept new connections, dispatching them to relayServer in a goroutine.
-		err := relay.listener.SetDeadline(time.Now().Add(SocketTimeout))
+	return nil
+}
+
+// StartRelay starts the listener ahdn handles connections for the serial relay.
+//
+// This is a server implementation of the SerialRelay so it logs to a provided
+// logger, and empty logger can be provided to stop logging if desired. This
+// function is designed to be used in a go routine so logging may be the only
+// way to get data about behavior while it is running. The resources can be shut
+// down by sending true to the ReadyToClose channel. This invokes CleanUp()
+// which is exported in case the caller desires to call it instead.
+func (relay *SerialRelay) StartRelay(logger *Logger, relayStatus *StatusLogBuffer) {
+	// Accept new connections, dispatching them to relayServer in a goroutine.
+	for {
+		err := relay.setListenerDeadline(time.Now().Add(SocketTimeout))
 		if err != nil {
 			logger.Fatal("Unable to set deadline on socket:", err)
 		}
+
 		socCon, err := relay.listener.Accept()
 		// Look for signal to exit, otherwise keep going, check the error only if we aren't supposed to shutdown
 		select {
@@ -193,11 +212,13 @@ func (relay *SerialRelay) StartRelay(logger *Logger, relayStatus *StatusLogBuffe
 			}
 
 		}
+
 		// Write the date to the relay
 		written, err := relay.serialConnection.RelayData(socCon)
 		if err != nil {
 			logger.Errorf("Failed to send data: %s\n", err)
 		}
+
 		// Increment the counter
 		atomic.AddInt64(&relayStatus.Written, int64(written))
 	}
@@ -208,5 +229,5 @@ func (relay *SerialRelay) StartRelay(logger *Logger, relayStatus *StatusLogBuffe
 func (relay *SerialRelay) CleanUp() {
 	_ = relay.listener.Close()
 	_ = relay.serialConnection.Close()
-	_ = os.RemoveAll(SocketPath)
+	_ = os.RemoveAll(RelaySocketPath)
 }

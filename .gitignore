@@ -1,0 +1,6 @@
+.DS_Store
+.idea
+*.log
+tmp/
+/ec2-macos-system-monitor
+/cpuutilization_darwin*

@@ -12,7 +12,7 @@ type Logger struct {
 	LogToStdout    bool
 	LogToSystemLog bool
 	Tag            string
-	SystemLog      syslog.Writer
+	SystemLog      *syslog.Writer
 }
 
 // defaultLogInterval is the number of writes before emitting a log entry 10 = once every 10 minutes
@@ -47,7 +47,12 @@ func NewLogger(tag string, systemLog bool, stdout bool) (logger *Logger, err err
 		log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	}
 
-	return &Logger{LogToSystemLog: systemLog, LogToStdout: stdout, Tag: tag, SystemLog: *syslogger}, nil
+	return &Logger{
+		LogToSystemLog: systemLog,
+		LogToStdout: stdout,
+		Tag: tag,
+		SystemLog: syslogger,
+	}, nil
 }
 
 // Info writes info to stdout and/or the system log.
@@ -56,7 +61,7 @@ func (l *Logger) Info(v ...interface{}) {
 		log.Print(v...)
 	}
 	if l.LogToSystemLog {
-		l.SystemLog.Info(fmt.Sprint(v...))
+		_ = l.SystemLog.Info(fmt.Sprint(v...))
 	}
 }
 
@@ -66,7 +71,7 @@ func (l *Logger) Infof(format string, v ...interface{}) {
 		log.Printf(format, v...)
 	}
 	if l.LogToSystemLog {
-		l.SystemLog.Info(fmt.Sprintf(format, v...))
+		_ = l.SystemLog.Info(fmt.Sprintf(format, v...))
 	}
 }
 
@@ -76,7 +81,7 @@ func (l *Logger) Warn(v ...interface{}) {
 		log.Print(v...)
 	}
 	if l.LogToSystemLog {
-		l.SystemLog.Warning(fmt.Sprint(v...))
+		_ = l.SystemLog.Warning(fmt.Sprint(v...))
 	}
 }
 
@@ -86,7 +91,7 @@ func (l *Logger) Warnf(format string, v ...interface{}) {
 		log.Printf(format, v...)
 	}
 	if l.LogToSystemLog {
-		l.SystemLog.Warning(fmt.Sprintf(format, v...))
+		_ = l.SystemLog.Warning(fmt.Sprintf(format, v...))
 	}
 }
 
@@ -96,7 +101,7 @@ func (l *Logger) Error(v ...interface{}) {
 		log.Print(v...)
 	}
 	if l.LogToSystemLog {
-		l.SystemLog.Err(fmt.Sprint(v...))
+		_ = l.SystemLog.Err(fmt.Sprint(v...))
 	}
 }
 
@@ -106,7 +111,7 @@ func (l *Logger) Errorf(format string, v ...interface{}) {
 		log.Printf(format, v...)
 	}
 	if l.LogToSystemLog {
-		l.SystemLog.Err(fmt.Sprintf(format, v...))
+		_ = l.SystemLog.Err(fmt.Sprintf(format, v...))
 	}
 }
 
