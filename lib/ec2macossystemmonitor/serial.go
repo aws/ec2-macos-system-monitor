@@ -9,9 +9,6 @@ import (
 	"go.bug.st/serial"
 )
 
-// RelaySocketPath is the default socket for relayd.
-const RelaySocketPath = "/tmp/.ec2monitoring.sock"
-
 // SerialConnection is the container for passing the ReadWriteCloser for serial connections.
 type SerialConnection struct {
 	port serial.Port
@@ -30,15 +27,10 @@ type SerialPayload struct {
 // SerialMessage is the container to actually send on the serial connection, contains checksum of SerialPayload to
 // provide additional assurance the entire payload has been written.
 type SerialMessage struct {
-	// Csum is the checksum used to ensure all data was received
-	Csum uint32 `json:"csum"`
+	// Checksum is the checksum used to ensure all data was received
+	Checksum uint32 `json:"csum"`
 	// Payload is the SerialPayload in json format
 	Payload string `json:"payload"`
-}
-
-// CheckSocketExists is a helper function to quickly check for the server.
-func CheckSocketExists() (exists bool) {
-	return fileExists(RelaySocketPath)
 }
 
 // NewSerialConnection creates a serial device connection and returns a reference to the connection.
