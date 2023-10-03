@@ -63,7 +63,7 @@ func main() {
 	LoggingTimer := time.Tick(ec2sm.DefaultLogInterval * time.Minute)
 
 	// Check if the socket is there, if not, warn that this might fail
-	if !ec2sm.CheckSocketExists() {
+	if !ec2sm.CheckSocketExists(ec2sm.DefaultRelaydSocketPath) {
 		logger.Fatal("Socket does not exist, relayd may not be running")
 	}
 	// Main for loop that polls for signals and CPU ticks

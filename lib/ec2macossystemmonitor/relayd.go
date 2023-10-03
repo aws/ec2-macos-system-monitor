@@ -15,6 +15,15 @@ import (
 
 const SocketTimeout = 5 * time.Second
 
+// DefaultRelaydSocketPath is the default socket for relayd listener.
+const DefaultRelaydSocketPath = "/tmp/.ec2monitoring.sock"
+
+// CheckSocketExists is a helper function to quickly check if the service UDS
+// exists.
+func CheckSocketExists(socketPath string) (exists bool) {
+	return fileExists(socketPath)
+}
+
 // BuildMessage takes a tag along with data for the tag and builds a byte slice to be sent to the relay.
 //
 // The tag is used as a way to namespace various payloads that are supported. Data is the payload and its format is
@@ -22,7 +31,12 @@ const SocketTimeout = 5 * time.Second
 // sending data. The slice of bytes is passed back to the caller to allow flexibility to log the bytes if desired before
 // passing to the relay via PassToRelayd
 func BuildMessage(tag string, data string, compress bool) ([]byte, error) {
-	var payload SerialPayload
+	payload := SerialPayload{
+		Tag: tag,
+		Compress: compress,
+		Data: data,
+	}
+
 	// This determines if the data will be passed in as provided or zlib compressed and then base64 encoded
 	// Some payload will exceed the limit of what can be sent on the serial device, so compression allows more data
 	// to be sent. base64 encoding allows safe characters only to be passed on the device
@@ -30,47 +44,36 @@ func BuildMessage(tag string, data string, compress bool) ([]byte, error) {
 		var b bytes.Buffer
 		w, err := zlib.NewWriterLevel(&b, 9)
 		if err != nil {
-			return []byte{}, fmt.Errorf("ec2macossystemmonitor: couldn't get compression writer: %s", err)
+			return nil, fmt.Errorf("ec2macossystemmonitor: couldn't get compression writer: %w", err)
 		}
 		_, err = w.Write([]byte(data))
 		if err != nil {
-			return []byte{}, fmt.Errorf("ec2macossystemmonitor: couldn't copy compressed data: %s", err)
+			return nil, fmt.Errorf("ec2macossystemmonitor: couldn't copy compressed data: %w", err)
 		}
 		err = w.Close()
 		if err != nil {
-			return []byte{}, fmt.Errorf("ec2macossystemmonitor: couldn't close compressor: %s", err)
+			return nil, fmt.Errorf("ec2macossystemmonitor: couldn't close compressor: %w", err)
 		}
 
-		encodedData := base64.StdEncoding.EncodeToString(b.Bytes())
-		payload = SerialPayload{
-			Tag:      tag,
-			Compress: compress,
-			Data:     encodedData,
-		}
-	} else {
-		// No compression needed, simply create the SerialPayload
-		payload = SerialPayload{
-			Tag:      tag,
-			Compress: compress,
-			Data:     data,
-		}
+		payload.Data = base64.StdEncoding.EncodeToString(b.Bytes())
 	}
-	// Once the payload is created, it's converted to json
+
+	// Marshal the payload to wrap in the relay output message.
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return []byte{}, fmt.Errorf("ec2macossystemmonitor: couldn't get %s into json", err)
+		return nil, fmt.Errorf("ec2macossystemmonitor: %w", err)
 	}
-	// A checksum is computed on the json payload for the serial message
-	checkSum := adler32.Checksum(payloadBytes)
-	message := SerialMessage{
-		Csum:    checkSum,
-		Payload: string(payloadBytes),
-	}
-	// Once the message is created, it's converted to json
-	messageBytes, err := json.Marshal(message)
+
+	messageBytes, err := json.Marshal(SerialMessage{
+		Checksum: adler32.Checksum(payloadBytes),
+		Payload:  string(payloadBytes),
+	})
 	if err != nil {
-		return []byte{}, fmt.Errorf("ec2macossystemmonitor: couldn't convert %s into json", err)
+		return nil, fmt.Errorf("ec2macossystemmonitor: marshal: %w", err)
 	}
+
+	// FIXME: message shouldn't append the newline, that's up to clients to
+	// decide (ie: flushing data as needed to clients/servers).
 	messageBytes = append(messageBytes, "\n"...)
 
 	return messageBytes, nil
@@ -78,15 +81,15 @@ func BuildMessage(tag string, data string, compress bool) ([]byte, error) {
 
 // PassToRelayd takes a byte slice and writes it to a UNIX socket to send for relaying.
 func PassToRelayd(messageBytes []byte) (n int, err error) {
-	// The socket file needs to be created to write, the server creates this file.
-	if !fileExists(RelaySocketPath) {
-		return 0, fmt.Errorf("ec2macossystemmonitor: %s does not exist, cannot send message: %s", RelaySocketPath, string(messageBytes))
+	// Make sure we have socket to connect to.
+	if !fileExists(DefaultRelaydSocketPath) {
+		return 0, fmt.Errorf("ec2macossystemmonitor: %s does not exist, cannot send message: %s", DefaultRelaydSocketPath, string(messageBytes))
 	}
 
-	// Finally write the serial message to the domain socket
-	sock, err := net.Dial("unix", RelaySocketPath)
+	// Connect and relay!
+	sock, err := net.Dial("unix", DefaultRelaydSocketPath)
 	if err != nil {
-		return 0, fmt.Errorf("cec2macossystemmonitor: could not connect to %s: %s", RelaySocketPath, err)
+		return 0, fmt.Errorf("cec2macossystemmonitor: could not connect to %s: %s", DefaultRelaydSocketPath, err)
 	}
 	defer sock.Close()
 
@@ -95,7 +98,6 @@ func PassToRelayd(messageBytes []byte) (n int, err error) {
 		return n, fmt.Errorf("ec2macossystemmonitor: error while writing to socket: %s", err)
 	}
 
-	// Return the length of the bytes written to the socket
 	return n, nil
 }
 
@@ -104,21 +106,26 @@ func PassToRelayd(messageBytes []byte) (n int, err error) {
 func SendMessage(tag string, data string, compress bool) (n int, err error) {
 	msgBytes, err := BuildMessage(tag, data, compress)
 	if err != nil {
-		return 0, fmt.Errorf("ec2macossystemmonitor: error while building message bytes: %s", err)
+		return 0, fmt.Errorf("ec2macossystemmonitor: error while building message bytes: %w", err)
 	}
 
 	return PassToRelayd(msgBytes)
 }
 
-// SerialRelay contains the serial connection and UNIX domain socket listener as well as the channel that communicates
-// that the resources can be closed.
+// SerialRelay manages client & listener to relay recieved messages to a serial
+// connection.
 type SerialRelay struct {
-	 // serialConnection is the managed serial device connection for writing.
+	// serialConnection is the managed serial device connection for writing
+	// (ie: relayed output).
 	serialConnection *SerialConnection
-	 // listener is the socket where relay input is read from.
-	listener         net.Listener
-	// ReadyToClose is the channel for communicating the need to close connections.
-	ReadyToClose     chan bool
+	// listener handles connections to relay received messages to the configured
+	// serialConnection.
+	listener net.Listener
+	// ReadyToClose is the channel for communicating the need to close
+	// connections.
+	//
+	// TODO: use context as replacement for cancellation
+	ReadyToClose chan bool
 }
 
 // NewRelay creates an instance of the relay server and returns a SerialRelay for manual closing.
@@ -126,17 +133,19 @@ type SerialRelay struct {
 // The SerialRelay returned from NewRelay is designed to be used in a go routine by using StartRelay. This allows the
 // caller to handle OS Signals and other events for clean shutdown rather than relying upon defer calls.
 func NewRelay(serialDevice string) (relay SerialRelay, err error) {
+	const socketPath = DefaultRelaydSocketPath
+
 	// Create a serial connection
 	serCon, err := NewSerialConnection(serialDevice)
 	if err != nil {
 		return SerialRelay{}, fmt.Errorf("relayd: failed to build a connection to serial interface: %w", err)
 	}
 
-	// Clean the socket in case its stale
-	if err = os.RemoveAll(RelaySocketPath); err != nil {
+	// Remove
+	if err = os.RemoveAll(socketPath); err != nil {
 		if _, ok := err.(*os.PathError); ok {
 			// Help guide that the SocketPath is invalid
-			return SerialRelay{}, fmt.Errorf("relayd: unable to clean %s: %w", RelaySocketPath, err)
+			return SerialRelay{}, fmt.Errorf("relayd: unable to clean %s: %w", socketPath, err)
 		} else {
 			// Unknown issue, return the error directly
 			return SerialRelay{}, err
@@ -144,8 +153,8 @@ func NewRelay(serialDevice string) (relay SerialRelay, err error) {
 
 	}
 
-	// Create a listener on the socket by getting the address and then creating a Unix Listener
-	addr, err := net.ResolveUnixAddr("unix", RelaySocketPath)
+	// Create the UDS listener.
+	addr, err := net.ResolveUnixAddr("unix", DefaultRelaydSocketPath)
 	if err != nil {
 		return SerialRelay{}, fmt.Errorf("relayd: unable to resolve address: %w", err)
 	}
@@ -153,12 +162,12 @@ func NewRelay(serialDevice string) (relay SerialRelay, err error) {
 	if err != nil {
 		return SerialRelay{}, fmt.Errorf("relayd: unable to listen on socket: %w", err)
 	}
-	// Create the SerialRelay to return
-	relay.listener = listener
-	relay.serialConnection = serCon
-	// Create the channel for sending an exit
-	relay.ReadyToClose = make(chan bool)
-	return relay, nil
+
+	return SerialRelay{
+		listener:         listener,
+		serialConnection: serCon,
+		ReadyToClose:     make(chan bool),
+	}, nil
 }
 
 // setListenerDeadline will set a deadline on the underlying net.Listener if
@@ -229,5 +238,6 @@ func (relay *SerialRelay) StartRelay(logger *Logger, relayStatus *StatusLogBuffe
 func (relay *SerialRelay) CleanUp() {
 	_ = relay.listener.Close()
 	_ = relay.serialConnection.Close()
-	_ = os.RemoveAll(RelaySocketPath)
+
+	_ = os.RemoveAll(DefaultRelaydSocketPath)
 }
