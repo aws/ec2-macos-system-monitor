@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
-	go.bug.st/serial v1.6.1
+	go.bug.st/serial v1.6.2
 )
 
 require (
