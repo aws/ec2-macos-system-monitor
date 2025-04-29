@@ -6,7 +6,7 @@ toolchain go1.23.3
 
 require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
-	go.bug.st/serial v1.6.3
+	go.bug.st/serial v1.6.4
 )
 
 require (
