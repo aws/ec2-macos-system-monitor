@@ -20,8 +20,12 @@ const pollInterval = 60 * time.Second
 // defaultSerialDevices lists the preferred order and supported set of serial
 // devices attached to the instance for monitor communication. The serial device
 // is able to receive monitor payloads encapsulated in json.
+//
+// The PCI address differs between instance generations: mac-m4.metal exposes
+// the monitor port at 49:00.0 rather than 4c:00.0.
 var defaultSerialDevices = []string{
 	"/dev/cu.pci-0000:4c:00.0,@00",
+	"/dev/cu.pci-0000:49:00.0,@00",
 	"/dev/cu.pci-serial0",
 }
 
